@@ -1,0 +1,22 @@
+# --- PYTHON ---
+__pycache__/
+*.pyc
+venv/
+.env
+
+# --- PROJET TITANIUM ---
+# On ne veut pas sauvegarder les musiques de test
+output/*.wav
+output/*.mid
+output/*.mp3
+
+# On ne sauvegarde pas la base de données locale (elle sera recréée)
+tracks.db
+
+# --- DOCKER / SYSTEME ---
+# On n'envoie pas le dossier fluidsynth Windows sur le Cloud (Linux n'en veut pas)
+fluidsynth/
+
+# --- IMPORTANT ---
+# On GARDE le dossier assets et la soundfont (.sf2) !
+# Donc on n'écrit PAS "assets/" ici.
