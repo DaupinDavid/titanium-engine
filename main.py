@@ -1,63 +1,112 @@
 import os
 import time
-from modules import composer, synthesizer, database, dsp, analyzer
-import shutil # Pour supprimer les fichiers temporaires
+from datetime import datetime
+import json
+import shutil 
 
-def run_pipeline():
-    print("🚀 Démarrage du pipeline TITANIUM...")
+# Import des modules
+from modules import composer, synthesizer, database, dsp, analyzer, humanizer, arranger, texture_generator
 
-    # 1. INITIALISATION & SETUP
-    database.init_db()
-    timestamp = int(time.time())
-    
-    base_dir = os.path.dirname(os.path.abspath(__file__))
-    output_dir = os.path.join(base_dir, 'output')
-    
-    # --- FIX CRITIQUE : Crée le dossier 'output' s'il n'existe pas (pour Docker) ---
+# --- Fonctions utilitaires ---
+def get_file_paths():
+    base_path = os.path.dirname(os.path.abspath(__file__))
+    output_dir = os.path.join(base_path, 'output')
     os.makedirs(output_dir, exist_ok=True)
     
+    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
     midi_filename = f"track_{timestamp}.mid"
-    wav_raw_filename = f"track_raw_{timestamp}.wav"
-    wav_master_filename = f"master_{timestamp}.wav"
+    wav_filename = f"track_master_{timestamp}.wav"
     
-    midi_path = os.path.join(output_dir, midi_filename)
-    raw_wav_path = os.path.join(output_dir, wav_raw_filename)
-    final_wav_path = os.path.join(output_dir, wav_master_filename)
+    return {
+        'base_path': base_path,
+        'config_path': os.path.join(base_path, 'config.json'),
+        'midi_path': os.path.join(output_dir, midi_filename),
+        'wav_path': os.path.join(output_dir, wav_filename),
+        'midi_filename': midi_filename,
+        'wav_filename': wav_filename,
+    }
 
-    # 2. COMPOSITION (Cerveau)
-    score, bpm = composer.generate_melody()
-    score.write('midi', fp=midi_path)
+def load_config(config_path):
+    with open(config_path, 'r') as f:
+        return json.load(f)
 
-    # 3. SYNTHÈSE (Moteur)
-    synth_success = synthesizer.render_wav(midi_path, raw_wav_path)
+# --- PIPELINE PRINCIPAL ---
+def run_pipeline():
+    print("--- ⚙️ TITANIUM CORE : LANCEMENT DU PIPELINE ---")
+    start_time = time.time()
     
-    if not synth_success:
-        database.log_track(wav_master_filename, bpm, "C Minor", "FAILED_SYNTH")
-        return False
-        
-    # 4. MASTERING (Qualité)
-    dsp_success = dsp.master_track(raw_wav_path, final_wav_path)
+    paths = get_file_paths()
+    config = load_config(paths['config_path'])
     
-    # 5. ANALYSE (Data Scientist)
-    features = analyzer.analyze_track(final_wav_path)
+    # 1. SETUP
+    database.init_db() 
+    conn = database.connect_db() 
+    print("   ✅ Configuration et Connexion BDD OK.")
 
-    # 6. ENREGISTREMENT (Mémoire)
-    if dsp_success and features:
-        key = composer.load_config()['generation_settings']['default_key']
+    # Définition des fichiers temporaires pour le mixage texture
+    temp_raw_midi = paths['midi_path']
+    # On crée un nom unique pour le raw
+    temp_raw_wav = os.path.join(paths['base_path'], 'output', f"raw_{paths['midi_filename'].replace('.mid', '.wav')}")
+    
+    # --- PHASE 6 : GÉNÉRATION TEXTURE ---
+    # On génère une texture de la durée approximative (24 mesures * 4 temps / 120 BPM * 60s ~ 48s)
+    # On met 20 secondes par défaut pour couvrir large
+    texture_path = texture_generator.generate_texture(duration_seconds=25)
+    
+    try:
+        # 2. COMPOSITION (Cerveau V6)
+        print("   🎶 Génération du score musical...")
+        score, bpm = composer.generate_melody()
         
-        # On pourrait logguer les features ici aussi si on ajoutait les colonnes à la BDD
-        database.log_track(wav_master_filename, bpm, key, "SUCCESS")
+        # Humanisation & Arrangement
+        score = humanizer.humanize_score(score)
+        score = arranger.create_full_arrangement(score)
         
-        # NOTE : On supprime le MIDI et le WAV RAW (on ne garde que le master final)
-        os.remove(midi_path)
-        os.remove(raw_wav_path)
+        score.write('midi', fp=temp_raw_midi)
+        print(f"   🎼 MIDI généré : {paths['midi_filename']} ({bpm} BPM)")
         
-        print(f"   ✅ PIPELINE TERMINÉ ! Fichier final : {wav_master_filename}")
-        return wav_master_filename
+        # 3. SYNTHESE (Moteur FluidSynth)
+        sf2_rel_path = config['paths']['soundfont']
+        # Utilisation de os.path.normpath pour gérer les slashs Windows/Linux automatiquement
+        soundfont_path = os.path.normpath(os.path.join(paths['base_path'], sf2_rel_path))
 
-    else:
-        database.log_track(wav_master_filename, bpm, "Unknown", "FAILED_DSP")
-        return False
+        synth_success = synthesizer.render_wav(temp_raw_midi, soundfont_path, temp_raw_wav)
+        
+        if not synth_success:
+            print("   ❌ ARRÊT : La synthèse audio a échoué.")
+            return
+
+        # 4. MASTERING & MIXAGE (DSP Bipiste)
+        # On mixe le RAW (FluidSynth) avec la TEXTURE
+        dsp.master_track(temp_raw_wav, texture_path, paths['wav_path'])
+        print("   🎚️ Mixage Texture + Mastering DSP appliqué.")
+        
+        # 5. ANALYSE & LOGGING
+        features = analyzer.analyze_track(paths['wav_path'])
+        score_index = features.get('score_index', 0)
+        final_status = "SUCCESS_HIGH_Q" if score_index >= 75 else "SUCCESS_LOW_Q"
+        
+        key = config.get('generation_settings', {}).get('default_key', 'N/A')
+        database.log_track(paths['wav_filename'], bpm, key, final_status)
+        
+        # --- NETTOYAGE DÉSACTIVÉ POUR DEBUG ---
+        # Si tu veux garder les fichiers preuves, laisse ces lignes commentées
+        # if os.path.exists(temp_raw_midi): os.remove(temp_raw_midi)
+        # if os.path.exists(temp_raw_wav): os.remove(temp_raw_wav)
+        # if os.path.exists(texture_path): os.remove(texture_path)
+        # --------------------------------------
+        
+    except Exception as e:
+        print(f"   ❌ ERREUR FATALE : {e}")
+        import traceback
+        traceback.print_exc() # Affiche le détail complet de l'erreur pour comprendre
+        return
+
+    # 6. CONCLUSION
+    end_time = time.time()
+    duration = round(end_time - start_time, 2)
+    print(f"\n--- ✅ PIPELINE TERMINÉ en {duration} secondes ---")
+    print(f"Fichier final : {paths['wav_path']}")
 
 if __name__ == "__main__":
     run_pipeline()

@@ -4,55 +4,75 @@ import json
 import sys
 
 def load_config():
-    """Charge la configuration, nécessaire pour trouver le SoundFont."""
     base_path = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
     config_path = os.path.join(base_path, 'config.json')
     try:
         with open(config_path, 'r') as f:
             return json.load(f)
     except FileNotFoundError:
-        # En production, on veut une erreur propre si config manque
-        print("❌ ERREUR FATALE: config.json introuvable.")
         sys.exit(1)
 
-
-def render_wav(midi_path, output_wav_path):
+def render_wav(midi_path, soundfont_path, output_wav_path):
     """
-    Convertit un fichier MIDI en WAV en utilisant FluidSynth.
+    Version NUCLÉAIRE pour Windows : Injection de PATH et Chemins Absolus.
     """
+    # 1. Chemins Absolus (Pas d'ambiguïté)
     base_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-    config = load_config()
-    
-    # --- DÉTECTION DE L'EXÉCUTABLE (Gère Windows et Linux/Cloud) ---
-    # Sur Linux/Docker, l'exe est juste 'fluidsynth' dans le PATH.
-    # Sur Windows, on utilise le chemin portable.
+    midi_abs = os.path.abspath(midi_path)
+    sf2_abs = os.path.abspath(soundfont_path)
+    out_abs = os.path.abspath(output_wav_path)
+
+    # 2. Configuration du Moteur
     if os.name == 'nt':
-        # NOTE: Le chemin dépend de l'extraction faite par l'utilisateur
-        fluidsynth_exe = os.path.join(base_dir, 'fluidsynth', 'bin', 'fluidsynth.exe')
-    else:
-        fluidsynth_exe = 'fluidsynth' # Docker/Linux PATH
+        fluidsynth_dir = os.path.join(base_dir, 'fluidsynth', 'bin')
+        executable = os.path.join(fluidsynth_dir, 'fluidsynth.exe')
         
-    sf2_rel_path = config['paths']['soundfont']
-    soundfont_path = os.path.join(base_dir, sf2_rel_path.replace('/', os.sep))
+        # --- INJECTION DE DLL (CRITIQUE) ---
+        # On dit à Windows : "Cherche les DLLs ici aussi !"
+        my_env = os.environ.copy()
+        my_env["PATH"] = fluidsynth_dir + os.pathsep + my_env["PATH"]
+    else:
+        executable = 'fluidsynth'
+        my_env = os.environ.copy()
 
-    # Vérification de la SoundFont (le carburant)
-    if not os.path.exists(soundfont_path):
-        print(f"❌ ERREUR : Soundfont introuvable : {soundfont_path}")
+    # 3. Vérifications
+    if not os.path.exists(sf2_abs):
+        print(f"❌ ERREUR : Soundfont introuvable : {sf2_abs}")
         return False
-
-    # La Commande Magique
+    
+    # 4. Commande (Syntaxe stricte FluidSynth 2.5)
+    # Exe | Soundfont | MIDI | Options | Sortie
     cmd = [
-        fluidsynth_exe,
+        executable,
         '-ni',              # No Interface
-        '-g', '1.0',        # Gain
-        '-F', output_wav_path, # Sortie WAV
-        soundfont_path,     # Banque de sons
-        midi_path           # Fichier d'entrée
+        sf2_abs,            # SoundFont (Absolu)
+        midi_abs,           # MIDI (Absolu)
+        '-F', out_abs,      # Sortie (Absolue)
+        '-r', '44100',      # Force Sample Rate
+        '-g', '1.0'         # Gain
     ]
 
-    # Exécution silencieuse
+    # 5. EXÉCUTION
+    print(f"   🔍 Exécution Moteur...")
     try:
-        subprocess.run(cmd, check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        # On capture TOUT pour voir pourquoi ça plante
+        result = subprocess.run(
+            cmd, 
+            env=my_env,       # <-- C'est ici que l'injection agit
+            check=True,
+            stdout=subprocess.PIPE, 
+            stderr=subprocess.PIPE,
+            text=True
+        )
         return True
-    except (subprocess.CalledProcessError, FileNotFoundError):
+        
+    except subprocess.CalledProcessError as e:
+        print(f"\n❌ CRASH MOTEUR (Code {e.returncode}) :")
+        print(f"--- LOG DU MOTEUR ---")
+        print(e.stdout)
+        print(e.stderr)
+        print(f"---------------------")
+        return False
+    except OSError as e:
+        print(f"\n❌ ERREUR SYSTÈME (WinError 193 probable) : {e}")
         return False
