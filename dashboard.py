@@ -14,6 +14,9 @@ DB_NAME = "tracks.db"
 base_dir = os.path.dirname(os.path.abspath(__file__))
 db_path = os.path.join(base_dir, DB_NAME)
 
+# --- FIX CRITIQUE : Assure la création de la table avant la lecture ---
+database.init_db()
+
 st.title("🎵 Titanium Data Engine")
 st.markdown("### Générateur Audio Autonome & Analytique (Niveau 10/10)")
 
@@ -29,7 +32,7 @@ with st.sidebar:
                 # Stocker le chemin du fichier pour le lecteur audio
                 st.session_state['last_track'] = os.path.join(base_dir, 'output', final_file)
             else:
-                 st.error("Échec du pipeline. Vérifiez les logs.")
+                 st.error("Échec du pipeline. Vérifiez les logs Render.")
 
 # --- ZONE PRINCIPALE ---
 col1, col2 = st.columns([1, 2])
