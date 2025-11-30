@@ -1,46 +1,51 @@
 import os
 import subprocess
 import json
+import sys
 
 def load_config():
+    """Charge la configuration, nécessaire pour trouver le SoundFont."""
     base_path = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
     config_path = os.path.join(base_path, 'config.json')
-    with open(config_path, 'r') as f:
-        return json.load(f)
+    try:
+        with open(config_path, 'r') as f:
+            return json.load(f)
+    except FileNotFoundError:
+        # En production, on veut une erreur propre si config manque
+        print("❌ ERREUR FATALE: config.json introuvable.")
+        sys.exit(1)
+
 
 def render_wav(midi_path, output_wav_path):
     """
-    Convertit un fichier MIDI en WAV en utilisant le moteur FluidSynth local.
+    Convertit un fichier MIDI en WAV en utilisant FluidSynth.
     """
-    # 1. On repère les chemins absolus (pour éviter les erreurs)
     base_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-    
-    # Chemin vers l'exécutable FluidSynth qu'on vient de coller
-    fluidsynth_exe = os.path.join(base_dir, 'fluidsynth', 'bin', 'fluidsynth.exe')
-    
-    # Chemin vers la SoundFont (le carburant)
     config = load_config()
-    # On nettoie le chemin du sf2 (au cas où il y ait des slashs bizarres)
+    
+    # --- DÉTECTION DE L'EXÉCUTABLE (Gère Windows et Linux/Cloud) ---
+    # Sur Linux/Docker, l'exe est juste 'fluidsynth' dans le PATH.
+    # Sur Windows, on utilise le chemin portable.
+    if os.name == 'nt':
+        # NOTE: Le chemin dépend de l'extraction faite par l'utilisateur
+        fluidsynth_exe = os.path.join(base_dir, 'fluidsynth', 'bin', 'fluidsynth.exe')
+    else:
+        fluidsynth_exe = 'fluidsynth' # Docker/Linux PATH
+        
     sf2_rel_path = config['paths']['soundfont']
     soundfont_path = os.path.join(base_dir, sf2_rel_path.replace('/', os.sep))
 
-    print(f"   🎹 Rendu Audio en cours...")
-    print(f"      Moteur : {fluidsynth_exe}")
-    print(f"      SoundFont : {soundfont_path}")
-
-    # 2. Vérification de sécurité
-    if not os.path.exists(fluidsynth_exe):
-        raise FileNotFoundError(f"❌ MOTEUR INTROUVABLE : {fluidsynth_exe}")
+    # Vérification de la SoundFont (le carburant)
     if not os.path.exists(soundfont_path):
-        raise FileNotFoundError(f"❌ SOUNDFONT INTROUVABLE : {soundfont_path}")
+        print(f"❌ ERREUR : Soundfont introuvable : {soundfont_path}")
+        return False
 
-    # 3. La Commande Magique (Subprocess)
-    # fluidsynth -ni -g 1.0 -F output.wav soundfont.sf2 input.mid
+    # La Commande Magique
     cmd = [
         fluidsynth_exe,
-        '-ni',              # No Interface (Mode commande)
-        '-g', '1.0',        # Gain (Volume)
-        '-F', output_wav_path, # Fichier de sortie
+        '-ni',              # No Interface
+        '-g', '1.0',        # Gain
+        '-F', output_wav_path, # Sortie WAV
         soundfont_path,     # Banque de sons
         midi_path           # Fichier d'entrée
     ]
@@ -48,20 +53,6 @@ def render_wav(midi_path, output_wav_path):
     # Exécution silencieuse
     try:
         subprocess.run(cmd, check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-        print(f"   ✨ SUCCÈS ! Audio créé : {output_wav_path}")
         return True
-    except subprocess.CalledProcessError as e:
-        print(f"   ❌ ERREUR MOTEUR : Le rendu a échoué.")
+    except (subprocess.CalledProcessError, FileNotFoundError):
         return False
-
-# --- TEST LOCAL ---
-if __name__ == "__main__":
-    # Pour tester, on prend le MIDI qu'on a généré à l'étape d'avant
-    base = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-    test_midi = os.path.join(base, 'output', 'test_melody.mid')
-    test_wav = os.path.join(base, 'output', 'test_audio.wav')
-    
-    if os.path.exists(test_midi):
-        render_wav(test_midi, test_wav)
-    else:
-        print("⚠️ Lance d'abord composer.py pour avoir un MIDI à tester !")
