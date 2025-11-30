@@ -1,78 +1,75 @@
 import os
 import subprocess
-import json
+import shutil
 import sys
-
-def load_config():
-    base_path = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-    config_path = os.path.join(base_path, 'config.json')
-    try:
-        with open(config_path, 'r') as f:
-            return json.load(f)
-    except FileNotFoundError:
-        sys.exit(1)
 
 def render_wav(midi_path, soundfont_path, output_wav_path):
     """
-    Version NUCLÉAIRE pour Windows : Injection de PATH et Chemins Absolus.
+    EXÉCUTION EN ZONE SÛRE (C:\SF2).
+    Contourne tous les bugs d'espaces et de chemins Windows.
     """
-    # 1. Chemins Absolus (Pas d'ambiguïté)
-    base_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-    midi_abs = os.path.abspath(midi_path)
-    sf2_abs = os.path.abspath(soundfont_path)
-    out_abs = os.path.abspath(output_wav_path)
-
-    # 2. Configuration du Moteur
-    if os.name == 'nt':
-        fluidsynth_dir = os.path.join(base_dir, 'fluidsynth', 'bin')
-        executable = os.path.join(fluidsynth_dir, 'fluidsynth.exe')
-        
-        # --- INJECTION DE DLL (CRITIQUE) ---
-        # On dit à Windows : "Cherche les DLLs ici aussi !"
-        my_env = os.environ.copy()
-        my_env["PATH"] = fluidsynth_dir + os.pathsep + my_env["PATH"]
-    else:
-        executable = 'fluidsynth'
-        my_env = os.environ.copy()
-
-    # 3. Vérifications
-    if not os.path.exists(sf2_abs):
-        print(f"❌ ERREUR : Soundfont introuvable : {sf2_abs}")
+    # 1. ZONE DE TRAVAIL (Doit exister)
+    work_dir = "C:\\SF2"
+    if not os.path.exists(work_dir):
+        print(f"❌ ERREUR: Le dossier {work_dir} n'existe pas. Créez-le et mettez le SF2 dedans.")
         return False
+
+    # Noms de fichiers temporaires simples
+    temp_midi = os.path.join(work_dir, "temp.mid")
+    temp_wav = os.path.join(work_dir, "temp.wav")
     
-    # 4. Commande (Syntaxe stricte FluidSynth 2.5)
-    # Exe | Soundfont | MIDI | Options | Sortie
+    # 2. NETTOYAGE & COPIE DU MIDI
+    if os.path.exists(temp_wav): os.remove(temp_wav)
+    try:
+        shutil.copy(midi_path, temp_midi)
+    except Exception as e:
+        print(f"❌ ERREUR COPIE MIDI: {e}")
+        return False
+
+    # 3. RECHERCHE DE L'EXECUTABLE
+    base_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    fluidsynth_exe = os.path.join(base_dir, 'fluidsynth', 'bin', 'fluidsynth.exe')
+    
+    if not os.path.exists(fluidsynth_exe):
+        print(f"❌ ERREUR EXE: Introuvable à {fluidsynth_exe}")
+        return False
+
+    # 4. COMMANDE SIMPLE (Tout est dans C:\SF2)
+    # soundfont.sf2 doit être dans C:\SF2
+    sf2_name = "soundfont.sf2" 
+    
     cmd = [
-        executable,
-        '-ni',              # No Interface
-        sf2_abs,            # SoundFont (Absolu)
-        midi_abs,           # MIDI (Absolu)
-        '-F', out_abs,      # Sortie (Absolue)
-        '-r', '44100',      # Force Sample Rate
-        '-g', '1.0'         # Gain
+        fluidsynth_exe,
+        '-ni',
+        '-g', '1.5', # Gain boosté
+        sf2_name,    # Juste le nom, car on sera dans le dossier
+        "temp.mid",
+        '-F', "temp.wav"
     ]
 
-    # 5. EXÉCUTION
-    print(f"   🔍 Exécution Moteur...")
+    print(f"   🔥 EXÉCUTION FLUIDSYNTH DANS {work_dir}...")
+    
     try:
-        # On capture TOUT pour voir pourquoi ça plante
+        # ON CHANGE LE DOSSIER D'EXÉCUTION (CWD)
         result = subprocess.run(
-            cmd, 
-            env=my_env,       # <-- C'est ici que l'injection agit
-            check=True,
-            stdout=subprocess.PIPE, 
+            cmd,
+            cwd=work_dir, # <-- MAGIE ICI
+            stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
             text=True
         )
-        return True
         
-    except subprocess.CalledProcessError as e:
-        print(f"\n❌ CRASH MOTEUR (Code {e.returncode}) :")
-        print(f"--- LOG DU MOTEUR ---")
-        print(e.stdout)
-        print(e.stderr)
-        print(f"---------------------")
-        return False
-    except OSError as e:
-        print(f"\n❌ ERREUR SYSTÈME (WinError 193 probable) : {e}")
+        # 5. RAPATRIEMENT
+        if os.path.exists(temp_wav) and os.path.getsize(temp_wav) > 50000: # Doit être > 50ko
+            if os.path.exists(output_wav_path): os.remove(output_wav_path)
+            shutil.move(temp_wav, output_wav_path)
+            print(f"   ✅ SUCCÈS : Audio généré et rapatrié.")
+            return True
+        else:
+            print(f"   ❌ ÉCHEC : Fichier audio vide ou absent.")
+            print(result.stderr)
+            return False
+
+    except Exception as e:
+        print(f"   ❌ CRASH SYSTÈME : {e}")
         return False
